@@ -210,20 +210,27 @@ def overlay_union(grid: np.ndarray, color_a: int, color_b: int, out_color: int) 
 
 
 def overlay_intersect(grid: np.ndarray, color_a: int, color_b: int, out_color: int) -> np.ndarray:
-    """Overlay intersection region: cells of color_a adjacent (4-neigh) to any cell of color_b.
-    Writes out_color at those a-cells.
+    """Overlay intersection region: cells of color_a adjacent to any cell of color_b.
+    Adjacency uses COMPONENTS_CONNECTIVITY (4 or 8).
     """
     a = int(color_a); b = int(color_b); oc = int(out_color)
     maskA = (grid == a)
     maskB = (grid == b)
     h, w = grid.shape
     adj = np.zeros_like(maskB)
+    # 4-neighborhood
     if h > 1:
         adj[:-1, :] |= maskB[1:, :]
         adj[1:, :] |= maskB[:-1, :]
     if w > 1:
         adj[:, :-1] |= maskB[:, 1:]
         adj[:, 1:] |= maskB[:, :-1]
+    # 8-neighborhood if configured
+    if int(COMPONENTS_CONNECTIVITY) == 8 and h > 1 and w > 1:
+        adj[:-1, :-1] |= maskB[1:, 1:]
+        adj[1:, 1:]  |= maskB[:-1, :-1]
+        adj[:-1, 1:]  |= maskB[1:, :-1]
+        adj[1:, :-1] |= maskB[:-1, 1:]
     inter = maskA & adj
     out = grid.copy()
     out[inter] = oc
