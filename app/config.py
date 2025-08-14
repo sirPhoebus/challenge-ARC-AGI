@@ -52,15 +52,6 @@ DEFAULTS: Dict[str, Any] = {
         "grad_clip": 1.0,
         "entropy_coef": 0.0,
         "kl_coef": 0.0,
-        "log_interval": 10,
-        "verbose": True,
-        "resume": True,
-        "save_every_epochs": 1,
-        "save_on_interrupt": True,
-        "use_tqdm": True,
-        # Only used if tqdm is installed; can be overridden in state/config.yaml
-        "tqdm_mininterval": 0.1,
-        "tqdm_leave": False,
         "seed": 42,
     },
     "model": {
@@ -75,6 +66,7 @@ DEFAULTS: Dict[str, Any] = {
         "beam_width": 16,
         "max_nodes": 1000,
         "use_policy": True,
+        "num_workers": 1,
     },
 }
 

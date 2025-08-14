@@ -6,7 +6,7 @@ dsl:
   max_arity: 2
   num_colors: 10            # ARC color palette size (0..9)
   max_grid_size: 30         # safety clamp for crop/pad
-  enum_numeric_values: [0,1,2,3,4]
+  enum_numeric_values: [0,1,2,3,4,5,6,7,8,9]
   rotations: [0,1,2,3]      # k for np.rot90
   reflections: [0,1,2,3,4]  # 0:none, 1:vertical, 2:horizontal, 3:diag_main, 4:diag_anti
   enable_ops: [MAP_COLOR, FILTER_EQ, ROTATE, REFLECT, CROP, PAD, COMPOSE]
@@ -28,17 +28,17 @@ tokens:
   BASE_REFLECT: 320        # reflect type tokens
 
 search:
-  beam_width: 16
-  max_nodes: 1000
-  max_expansions_per_node: 32
+  beam_width: 128
+  max_nodes: 20000
+  max_expansions_per_node: 128
   cache_results: true
   bad_score: -1e9
 
 training:
   pseudo_max_depth: 3
-  task_limit: 20
-  batch_size: 64
-  epochs: 5
+  task_limit: 200
+  batch_size: 512
+  epochs: 10
   lr: 0.0005
   weight_decay: 0.0
   grad_clip: 1.0
@@ -47,14 +47,15 @@ training:
   seed: 42
 
 model:
-  d_model: 128
-  nhead: 4
-  nlayers: 2
+  d_model: 256
+  nhead: 8
+  nlayers: 4
   dropout: 0.1
-  max_tokens: 128
+  max_tokens: 256
 
 inference:
-  time_budget_s: 10
-  beam_width: 16
-  max_nodes: 1000
+  time_budget_s: 30
+  beam_width: 128
+  max_nodes: 20000
   use_policy: true
+  num_workers: 8

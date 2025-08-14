@@ -3,6 +3,7 @@ import os
 from typing import Callable, List, Optional, Tuple
 import numpy as np
 import torch
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from app import config
 from app.utils import arc_io
@@ -51,6 +52,22 @@ def _make_policy_scorer() -> Optional[Callable[[List[int], List[dict]], float]]:
     return wrap_factory  # type: ignore[return-value]
 
 
+def _solve_task_nopolicy(task: dict, max_depth: int, beam_width: int, max_nodes: int) -> int:
+    """Solve a single task without policy guidance. Returns 1 if solved else 0.
+    Top-level function for multiprocessing.
+    """
+    from app.search.enumerator import enumerate_programs  # local import for spawn safety
+    from app.search.beam_search import beam_search
+    from app.dsl.interpreter import consistent_on_pairs
+
+    pairs = task.get("train", [])
+    if not pairs:
+        pairs = task.get("test", [])
+    enum = enumerate_programs(int(max_depth))
+    best_tokens, best_score = beam_search(pairs, enumerator=enum, scorer=None, max_nodes=max_nodes, beam_width=beam_width)
+    return 1 if (best_tokens is not None and consistent_on_pairs(best_tokens, pairs)) else 0
+
+
 def evaluate(limit_tasks: Optional[int] = None) -> Tuple[int, int]:
     tasks = arc_io.load_tasks("evaluation", limit=limit_tasks)
     solved = 0
@@ -58,19 +75,40 @@ def evaluate(limit_tasks: Optional[int] = None) -> Tuple[int, int]:
 
     factory = _make_policy_scorer()
 
-    for task in tasks:
-        pairs = task.get("train", [])
-        if not pairs:
-            pairs = task.get("test", [])
-        if factory is not None:
-            scorer = factory(pairs)
-        else:
-            scorer = None  # type: ignore[assignment]
+    bw = int(config.INFER_CFG.get("beam_width", config.SEARCH_CFG.get("beam_width", 16)))
+    mn = int(config.INFER_CFG.get("max_nodes", config.SEARCH_CFG.get("max_nodes", 1000)))
+    nw = int(config.INFER_CFG.get("num_workers", 1))
+    use_policy = bool(config.INFER_CFG.get("use_policy", True)) and (factory is not None)
 
-        enum = enumerate_programs(int(config.DSL_MAX_DEPTH))
-        best_tokens, best_score = beam_search(pairs, enumerator=enum, scorer=scorer)
-        if best_tokens is not None and consistent_on_pairs(best_tokens, pairs):
-            solved += 1
+    # Parallel path only when NOT using policy (to avoid GPU contention)
+    if (not use_policy) and nw > 1 and total > 1:
+        print(f"[eval] parallel mode: workers={nw} | beam={bw} | max_nodes={mn}", flush=True)
+        with ProcessPoolExecutor(max_workers=nw) as ex:
+            futures = [ex.submit(_solve_task_nopolicy, task, int(config.DSL_MAX_DEPTH), bw, mn) for task in tasks]
+            for i, fut in enumerate(as_completed(futures), 1):
+                try:
+                    solved += int(fut.result())
+                except Exception:
+                    pass
+                if i % 1 == 0:
+                    print(f"[eval] completed {i}/{total} | solved={solved}", flush=True)
+    else:
+        if use_policy and nw > 1:
+            print(f"[eval] policy enabled -> running single-process to use GPU efficiently (requested workers={nw})", flush=True)
+        for idx, task in enumerate(tasks):
+            print(f"[eval] task {idx+1}/{total} ...", flush=True)
+            pairs = task.get("train", [])
+            if not pairs:
+                pairs = task.get("test", [])
+            if factory is not None:
+                scorer = factory(pairs)
+            else:
+                scorer = None  # type: ignore[assignment]
+
+            enum = enumerate_programs(int(config.DSL_MAX_DEPTH))
+            best_tokens, best_score = beam_search(pairs, enumerator=enum, scorer=scorer, max_nodes=mn, beam_width=bw)
+            if best_tokens is not None and consistent_on_pairs(best_tokens, pairs):
+                solved += 1
     print(f"Solved {solved}/{total} evaluation tasks")
     return solved, total
 

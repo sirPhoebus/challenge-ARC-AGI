@@ -32,11 +32,19 @@ def beam_search(pairs: List[dict], enumerator: Optional[Iterable[List[int]]] = N
 
     beam: List[Tuple[List[int], float]] = []
     best: Tuple[Optional[List[int]], float] = (None, float(config.SEARCH_BAD_SCORE))
+    cache_on = bool(config.SEARCH_CFG.get("cache_results", True))
+    score_cache: Dict[Tuple[int, ...], float] = {} if cache_on else {}
     n = 0
     for tokens in enumerator:
         if not valid_tokens(tokens, config.DSL_MAX_DEPTH):
             continue
-        score = scorer(tokens) if scorer is not None else _heuristic_score(tokens, pairs)
+        tkey = tuple(tokens)
+        if cache_on and tkey in score_cache:
+            score = score_cache[tkey]
+        else:
+            score = scorer(tokens) if scorer is not None else _heuristic_score(tokens, pairs)
+            if cache_on:
+                score_cache[tkey] = score
         n += 1
         if score > best[1]:
             best = (tokens, score)
