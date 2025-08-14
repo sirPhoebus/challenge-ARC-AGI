@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+.env
+.env.*
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test/typing caches
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.coverage
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temp
+logs/
+*.log
+*.tmp
+*.bak
+
+# Project state artifacts (generated)
+state/runs/
+state/proposals/
+state/applied/
+state/cache/
+# If you generate local memory or kb files under state/, ignore them:
+state/*.db
+state/*.sqlite
+state/*.sqlite3
+state/*.json
+
+# Data/cache
+.cache/
+**/.cache/
+
+data/
+!.keep
+state/
+# Notebooks checkpoints
+.ipynb_checkpoints/
