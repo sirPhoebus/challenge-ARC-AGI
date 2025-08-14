@@ -28,8 +28,10 @@ def seed_all(seed: int) -> None:
 def collect_pseudo_labels() -> List[Dict]:
     tasks = arc_io.load_tasks("training", limit=int(config.TRAIN_CFG["task_limit"]))
     max_depth = int(config.TRAIN_CFG["pseudo_max_depth"]) or int(config.DSL_MAX_DEPTH)
+    print(f"[train] collecting pseudo labels | tasks={len(tasks)} | max_depth={max_depth}", flush=True)
     samples: List[Dict] = []
-    for task in tasks:
+    for ti, task in enumerate(tasks):
+        print(f"[train] task {ti+1}/{len(tasks)}: collecting...", flush=True)
         pairs = task["train"]
         for tokens in enumerate_programs(max_depth):
             ok = True
@@ -60,7 +62,9 @@ def collect_pseudo_labels() -> List[Dict]:
                     "next": T.TOK["END"],
                     "final": 1,
                 })
+                print(f"[train] task {ti+1}: found solution | samples+= {len(tokens)}+1", flush=True)
                 break  # one solution per task to keep it small
+        print(f"[train] task {ti+1}: cumulative samples={len(samples)}", flush=True)
     return samples
 
 
@@ -81,11 +85,14 @@ def load_jsonl(path: str) -> List[Dict]:
 
 def train():
     seed_all(int(config.TRAIN_CFG["seed"]))
+    print("[train] starting training pipeline", flush=True)
     if not os.path.exists(PSEUDO_PATH):
         samples = collect_pseudo_labels()
+        print(f"[train] saving pseudo labels -> {PSEUDO_PATH} | n={len(samples)}", flush=True)
         save_jsonl(PSEUDO_PATH, samples)
     else:
         samples = load_jsonl(PSEUDO_PATH)
+        print(f"[train] loaded pseudo labels from {PSEUDO_PATH} | n={len(samples)}", flush=True)
 
     model = ProgramPolicy()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -100,6 +107,7 @@ def train():
     B = int(config.TRAIN_CFG["batch_size"]) or 32
     epochs = int(config.TRAIN_CFG["epochs"]) or 1
 
+    print(f"[train] model device={device} | epochs={epochs} | batch_size={B}", flush=True)
     for ep in range(epochs):
         random.shuffle(samples)
         total_loss = 0.0
@@ -121,10 +129,10 @@ def train():
             opt.step()
             total_loss += float(loss.item())
             n += 1
-        print(f"epoch {ep+1}/{epochs} | batches={n} | loss={total_loss/max(1,n):.4f}")
+        print(f"[train] epoch {ep+1}/{epochs} | batches={n} | loss={total_loss/max(1,n):.4f}", flush=True)
 
     torch.save(model.state_dict(), CKPT_PATH)
-    print(f"Saved policy to {CKPT_PATH}")
+    print(f"[train] saved policy -> {CKPT_PATH}", flush=True)
 
 
 if __name__ == "__main__":

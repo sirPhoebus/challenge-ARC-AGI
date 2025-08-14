@@ -1,81 +1,172 @@
-# Abstraction and Reasoning Corpus for Artificial General Intelligence v2 (ARC-AGI-2)
+# ARC-AGI-2 + Program-Synthesis Agent
 
-This repository contains the ARC-AGI-2 task data (ARC-AGI-1 can be found [here](https://github.com/fchollet/arc-agi)).
+This repository contains:
+- The ARC-AGI-2 dataset (public training and evaluation tasks).
+- A config-driven program-synthesis system for ARC-style grid transformations:
+  - A compact DSL with deterministic, testable ops.
+  - Enumerative and beam search over token programs.
+  - Optional incremental typed beam search guided by a policy model.
 
-*"ARC can be seen as a general artificial intelligence benchmark, as a program synthesis benchmark, or as a psychometric intelligence test. It is targeted at both humans and artificially intelligent systems that aim at emulating a human-like form of general fluid intelligence."*
-
-A foundational description of the dataset, its goals, and its underlying logic, can be found in: [On the Measure of Intelligence](https://arxiv.org/abs/1911.01547), the [ARC-AGI-2 Presentation](https://docs.google.com/presentation/d/1hQrGh5YI6MK3PalQYSQs4CQERrYBQZue8PBLjjHIMgI/edit?usp=sharing) and [ARC-AGI-2 Technical Report](http://arcprize.org/blog/arc-agi-2-technical-report)
-
-## Dataset composition
-
-ARC-AGI-2 contains 1,000 public training tasks and 120 public evaluation tasks.
-
-The training tasks are intended to demonstrate the task format and the Core Knowledge priors used by ARC-AGI. They can be used for training AI models.
-The public evaluation tasks are intended for testing AI models that have never seen these tasks before. Average human performance on these tasks in our test sample was 66%.
-
-ARC-AGI-2 also features two private test sets not included in the repo:
-
-- A semi-private set intended for testing remotely-hosted commercial models with low leakage probability. It is calibrated to be the same human-facing difficulty as the public evaluation set.
-- A fully-private set intended for testing self-contained models during the ARC Prize competition, with near-zeo leakage probability. It is also calibrated to be the same difficulty.
-
-This multi-tiered structure allows for both open research and a secure, high-stakes competition.
-
-## Task success criterion
-
-A test-taker is said to solve a task when, upon seeing the task for the first time, they are able to produce the correct output grid for *all* test inputs in the task (this includes picking the dimensions of the output grid). For each test input, the test-taker is allowed 2 trials (this holds for all test-takers, either humans or AI).
-
-## Task file format
-
-The `data` directory contains two subdirectories:
-
-- `data/training`: contains the task files for training (1000 tasks). Use these to prototype your algorithm or to train your algorithm to acquire ARC-relevant cognitive priors. This set combines tasks from ARC-AGI-1 as well as new tasks.
-- `data/evaluation`: contains the task files for evaluation (120 tasks). Use these to evaluate your final algorithm. To ensure fair evaluation results, do not leak information from the evaluation set into your algorithm (e.g. by looking at the evaluation tasks yourself during development, or by repeatedly modifying an algorithm while using its evaluation score as feedback). Each task in `evaluation` has been solved by a minimum of 2 people (many tasks were solved by more) in 2 attempts or less in a controlled test.
-
-The tasks are stored in JSON format. Each task JSON file contains a dictionary with two fields:
-
-- `"train"`: demonstration input/output pairs. It is a list of "pairs" (typically 3 pairs).
-- `"test"`: test input/output pairs. It is a list of "pairs" (typically 1-2 pair).
-
-A "pair" is a dictionary with two fields:
-
-- `"input"`: the input "grid" for the pair.
-- `"output"`: the output "grid" for the pair.
-
-A "grid" is a rectangular matrix (list of lists) of integers between 0 and 9 (inclusive). The smallest possible grid size is 1x1 and the largest is 30x30.
-
-When looking at a task, a test-taker has access to inputs & outputs of the demonstration pairs, plus the input(s) of the test pair(s). The goal is to construct the output grid(s) corresponding to the test input grid(s), using 3 trials for each test input. "Constructing the output grid" involves picking the height and width of the output grid, then filling each cell in the grid with a symbol (integer between 0 and 9, which are visualized as colors). Only *exact* solutions (all cells match the expected answer) can be said to be correct.
+All parameters (tokens, constants, search weights/knobs) are controlled globally via config. No literals are hardcoded in code.
 
 
-## Usage of the testing interface
+## Directory structure
 
-You can view tasks on [ARCPrize.org/play](https://arcprize.org/play) or clone the [ARC-AGI-1 testing interface](https://github.com/fchollet/ARC-AGI/tree/master/apps). Open it in a web browser (Chrome recommended). It will prompt you to select a task JSON file.
+- `app/`
+  - `config.py`: Centralized global config loader/merger from `state/config.yaml`. Exposes constants and maps.
+  - `dsl/`
+    - `ops.py`: Deterministic NumPy grid ops (primitive DSL operations).
+    - `program.py`: Token/AST representation, arity, parsing/validation.
+    - `interpreter.py`: Executes token programs on input grids; pair-consistency utilities.
+  - `search/`
+    - `enumerator.py`: Typed arg enumeration for ops (deterministic arg spaces).
+    - `beam_search.py`: Classic beam search and incremental typed beam search (policy-guided) with execution pruning.
+  - `eval/`
+    - `arc_eval.py`: Evaluation loop over ARC tasks with/without policy.
+  - `utils/`
+    - `tokens.py`: Token maps, vocabulary, dynamic tokens for numbers/colors/rots/reflects, and `OP_ARITY`.
+- `data/`
+  - `training/` (1000 tasks), `evaluation/` (120 tasks).
+- `state/`
+  - `config.yaml`: Project configuration (the single source of truth for knobs and enabled ops).
+  - `policy.pt` (optional): Policy checkpoint for incremental typed beam search.
+- `requirements.txt`
 
-After loading a task, you will enter the test space, which looks like this:
 
-![test space](https://arc-benchmark.s3.amazonaws.com/figs/arc_test_space.png)
+## DSL overview
 
-On the left, you will see the input/output pairs demonstrating the nature of the task. In the middle, you will see the current test input grid. On the right, you will see the controls you can use to construct the corresponding output grid.
+The DSL operates on integer grid images (NumPy arrays). Each op is minimal, deterministic, and testable. All constants (e.g., number of colors, connectivity, background color) come from config.
 
-You have access to the following tools:
+Existing primitives include `MAP_COLOR`, `FILTER_EQ`, `ROTATE`, `REFLECT`, `CROP`, `PAD`, plus the binary `COMPOSE` operator.
 
-### Grid controls
+### Newly added ops (config-gated)
+All new ops are available only when listed in `state/config.yaml` under `dsl.enable_ops`. Arity is defined in `app/utils/tokens.py` (`OP_ARITY`). Implementations live in `app/dsl/ops.py`; interpreter wiring is in `app/dsl/interpreter.py`.
 
-- Resize: input a grid size (e.g. "10x20" or "4x4") and click "Resize". This preserves existing grid content (in the top left corner).
-- Copy from input: copy the input grid to the output grid. This is useful for tasks where the output consists of some modification of the input.
-- Reset grid: fill the grid with 0s.
+- `FIND_COMPONENTS(offset: num)`
+  - Relabels connected components of non-background cells using `(offset + 1 + i) % NUM_COLORS`.
+  - Connectivity set by `MODEL_CFG.components_connectivity` (4 or 8).
+- `GET_BBOX(color: col)`
+  - Crops grid to tight bounding box of `color`. If absent, returns input unchanged.
+- `PAINT_OBJECT(src_color: col, dst_color: col)`
+  - Paints all `src_color` cells to `dst_color`.
+- `COUNT_COLOR(color: col)`
+  - Counts occurrences of `color`; returns a constant grid filled with `(count % NUM_COLORS)`.
+- `MAJORITY_COLOR(tie_color: col)`
+  - Returns a constant grid of the most frequent color; ties resolved to `tie_color`.
+- `TRANSLATE(dy: num, dx: num)`
+  - Shifts grid down/right by `(dy, dx)`; out-of-bounds filled with background.
+- `DRAW_LINE(y0: num, x0: num, y1: num, x1: num, color: col)`
+  - Bresenham-like line drawing; coordinates clamped to grid.
+- `FILL_RECT(top: num, left: num, height: num, width: num, color: col)`
+  - Fills axis-aligned rectangle; bounds clamped.
+- `REPEAT_TILE(ny: num, nx: num)`
+  - Tiles the grid `(ny, nx)` and crops to `DSL_MAX_GRID_SIZE`.
+- `OVERLAY_UNION(color_a: col, color_b: col, out_color: col)`
+  - Writes `out_color` where grid equals `color_a` or `color_b`.
+- `OVERLAY_INTERSECT(color_a: col, color_b: col, out_color: col)`
+  - Writes `out_color` at `color_a` cells adjacent to any `color_b` cell;
+    adjacency respects `components_connectivity` (4/8).
 
-### Symbol controls
 
-- Edit: select a color (symbol) from the color picking bar, then click on a cell to set its color.
-- Select: click and drag on either the output grid or the input grid to select cells.
-    - After selecting cells on the output grid, you can select a color from the color picking to set the color of the selected cells. This is useful to draw solid rectangles or lines.
-    - After selecting cells on either the input grid or the output grid, you can press C to copy their content. After copying, you can select a cell on the output grid and press "V" to paste the copied content. You should select the cell in the top left corner of the zone you want to paste into.
-- Floodfill: click on a cell from the output grid to color all connected cells to the selected color. "Connected cells" are contiguous cells with the same color.
+## Config system
 
-### Answer validation
+- Primary file: `state/config.yaml` (merged into Python via `app/config.py`).
+- Areas:
+  - `dsl.*`: `enable_ops`, depth, numbers/colors/rots/reflects, grid size.
+  - `tokens.*`: Token IDs for ops and dynamic token ranges.
+  - `search.*`: Beam width, max nodes, time budgets, incremental typed knobs.
+  - `infer.*`: Evaluation/inference options, workers, use_policy toggle.
+  - `model.*`: Component connectivity, background color, policy settings.
 
-When your output grid is ready, click the green "Submit!" button to check your answer. We do not enforce the 2-trials rule.
+All DSL token IDs and op enablement are controlled here for ablations. Search weights/knobs are fully exposed—no literals are hardcoded.
 
-After you've obtained the correct answer for the current test input grid, you can switch to the next test input grid for the task using the "Next test input" button (if there is any available; most tasks only have one test input).
 
-When you're done with a task, use the "load task" button to open a new task.
+## Search
+
+- `enumerator.py` emits typed argument choices for each enabled op.
+- `beam_search.py` implements:
+  - Classic beam over enumerator sequences.
+  - Incremental typed beam search:
+    - Tracks expected token kinds and masks policy logits by type.
+    - Execution-guided pruning with heuristic loss on training pairs.
+    - Scores combine policy log-probs and execution heuristics (weights from config).
+
+
+## Interpreter and programs
+
+- `program.py` defines token/AST conversions and validity checks, using centralized `OP_ARITY` from `tokens.py`.
+- `interpreter.py` executes ASTs deterministically on NumPy grids. Pair consistency check utilities are provided.
+
+
+## Evaluation
+
+File: `app/eval/arc_eval.py`.
+
+- Enumerative beam (no policy):
+  ```bash
+  # Evaluate all tasks (single-process)
+  python -m app.eval.arc_eval
+
+  # Tiny eval of N tasks
+  python -c "from app.eval.arc_eval import evaluate; evaluate(2)"
+  ```
+- Incremental typed beam (policy-guided):
+  - Place a compatible checkpoint at `state/policy.pt` and set `infer.use_policy: true` in `state/config.yaml`.
+  - Optional: adjust `search.policy_beam_width`, `search.policy_max_nodes`.
+
+
+## Training (policy)
+
+A `ProgramPolicy` model (not required for enumerative search) can be trained to guide incremental typed search.
+- Define/inspect the model in `app/model/program_policy.py` (if present in your branch).
+- Ensure the policy’s vocabulary size matches the current token set in `app/utils/tokens.py`.
+- Save checkpoints as `state/policy.pt` for evaluation.
+
+
+## Reproducibility & conventions
+
+- All constants come from `config.py` merged with `state/config.yaml`.
+- No hardcoded numerical literals in code; use global variables from config only.
+- Deterministic NumPy ops; seeded randomness (if any) must be drawn from config.
+
+
+## Quick smoke tests
+
+- Import and basic op execution:
+  ```bash
+  python -c "import numpy as np; from app.dsl import ops as OP; g=np.zeros((3,3),int); OP.translate(g,1,1); print('OK')"
+  ```
+- Tiny enumerative eval on 2 tasks:
+  ```bash
+  python -c "from app.eval.arc_eval import evaluate; evaluate(2)"
+  ```
+- Tiny incremental typed eval (requires `state/policy.pt` or a dummy policy):
+  ```bash
+  # Real policy
+  python -m app.eval.arc_eval
+  ```
+
+
+## What changed in this fork
+
+- Added minimal deterministic DSL ops:
+  - `TRANSLATE`, `DRAW_LINE`, `FILL_RECT`, `REPEAT_TILE`,
+    `GET_BBOX`, `PAINT_OBJECT`, `FIND_COMPONENTS`,
+    `COUNT_COLOR`, `MAJORITY_COLOR`, `OVERLAY_UNION`, `OVERLAY_INTERSECT`.
+- Extended `OP_ARITY` and typed argument spaces (`tokens.py`, `enumerator.py`, `beam_search.py`).
+- Integrated ops into interpreter (`interpreter.py`).
+- Implemented incremental typed beam search with execution-guided pruning.
+- Exposed all search and DSL knobs in `state/config.yaml` (no hardcoded values).
+
+
+## Limitations & next steps
+
+- `TRANSLATE` currently clamps to non-negative shifts (down/right) for minimality.
+- Some ops (e.g., `GET_BBOX`) can change grid shape; ensure downstream code handles shape changes.
+- Consider unit tests per op for regression safety.
+- If resuming from older checkpoints, ensure token vocab alignment or retrain.
+
+
+## License
+
+Refer to the original ARC-AGI-2 dataset license and any licenses for added code where applicable.
