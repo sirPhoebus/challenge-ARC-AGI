@@ -41,6 +41,18 @@ DEFAULTS: Dict[str, Any] = {
         "max_expansions_per_node": 32,
         "cache_results": True,
         "bad_score": -1e9,
+        # Numerical stability for entropy calculation
+        "entropy_eps": 1e-12,
+        "entropy_clip_max": 1.0,
+        # RCR-inspired routing controls for heuristic scoring
+        # If enabled, only a subset of I/O pairs will be used for heuristic scoring
+        # to respect a context/token budget analogue. Strategy can be "entropy_size".
+        "pair_subset_enable": True,
+        "pair_subset_k": 2,
+        "pair_subset_strategy": "entropy_size",
+        # Optional policy-specific search limits (fallback to beam_width/max_nodes if unset)
+        "policy_beam_width": 16,
+        "policy_max_nodes": 1000,
     },
     "training": {
         "pseudo_max_depth": 3,
@@ -67,6 +79,13 @@ DEFAULTS: Dict[str, Any] = {
         "max_nodes": 1000,
         "use_policy": True,
         "num_workers": 1,
+        # Disable time budget when value <= this threshold
+        "time_budget_disable_threshold": 0.0,
+        # Parallelization conditions
+        "parallel_min_workers": 2,
+        "parallel_min_tasks": 2,
+        # Progress logging interval (tasks)
+        "progress_interval": 1,
     },
 }
 

@@ -64,7 +64,15 @@ def _solve_task_nopolicy(task: dict, max_depth: int, beam_width: int, max_nodes:
     if not pairs:
         pairs = task.get("test", [])
     enum = enumerate_programs(int(max_depth))
-    best_tokens, best_score = beam_search(pairs, enumerator=enum, scorer=None, max_nodes=max_nodes, beam_width=beam_width)
+    tb = float(config.INFER_CFG["time_budget_s"])
+    best_tokens, best_score = beam_search(
+        pairs,
+        enumerator=enum,
+        scorer=None,
+        max_nodes=max_nodes,
+        beam_width=beam_width,
+        time_budget_s=tb,
+    )
     return 1 if (best_tokens is not None and consistent_on_pairs(best_tokens, pairs)) else 0
 
 
@@ -75,14 +83,19 @@ def evaluate(limit_tasks: Optional[int] = None) -> Tuple[int, int]:
 
     factory = _make_policy_scorer()
 
-    bw = int(config.INFER_CFG.get("beam_width", config.SEARCH_CFG.get("beam_width", 16)))
-    mn = int(config.INFER_CFG.get("max_nodes", config.SEARCH_CFG.get("max_nodes", 1000)))
-    nw = int(config.INFER_CFG.get("num_workers", 1))
-    use_policy = bool(config.INFER_CFG.get("use_policy", True)) and (factory is not None)
+    bw = int(config.INFER_CFG.get("beam_width", config.SEARCH_CFG["beam_width"]))
+    mn = int(config.INFER_CFG.get("max_nodes", config.SEARCH_CFG["max_nodes"]))
+    nw = int(config.INFER_CFG["num_workers"])
+    use_policy = bool(config.INFER_CFG["use_policy"]) and (factory is not None)
+    time_budget = float(config.INFER_CFG["time_budget_s"])
+
+    # If using policy, optionally tighten/modify beam settings from SEARCH config
+    eff_bw = int(config.SEARCH_CFG.get("policy_beam_width", bw)) if use_policy else bw
+    eff_mn = int(config.SEARCH_CFG.get("policy_max_nodes", mn)) if use_policy else mn
 
     # Parallel path only when NOT using policy (to avoid GPU contention)
     if (not use_policy) and nw > 1 and total > 1:
-        print(f"[eval] parallel mode: workers={nw} | beam={bw} | max_nodes={mn}", flush=True)
+        print(f"[eval] parallel mode: workers={nw} | beam={bw} | max_nodes={mn} | time_budget_s={time_budget}", flush=True)
         with ProcessPoolExecutor(max_workers=nw) as ex:
             futures = [ex.submit(_solve_task_nopolicy, task, int(config.DSL_MAX_DEPTH), bw, mn) for task in tasks]
             for i, fut in enumerate(as_completed(futures), 1):
@@ -106,7 +119,14 @@ def evaluate(limit_tasks: Optional[int] = None) -> Tuple[int, int]:
                 scorer = None  # type: ignore[assignment]
 
             enum = enumerate_programs(int(config.DSL_MAX_DEPTH))
-            best_tokens, best_score = beam_search(pairs, enumerator=enum, scorer=scorer, max_nodes=mn, beam_width=bw)
+            best_tokens, best_score = beam_search(
+                pairs,
+                enumerator=enum,
+                scorer=scorer,
+                max_nodes=eff_mn,
+                beam_width=eff_bw,
+                time_budget_s=time_budget,
+            )
             if best_tokens is not None and consistent_on_pairs(best_tokens, pairs):
                 solved += 1
     print(f"Solved {solved}/{total} evaluation tasks")

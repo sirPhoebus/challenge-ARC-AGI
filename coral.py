@@ -99,6 +99,22 @@ V_LOSS_COEF = 1.5
 ADV_EPS = 1e-8
 EV_EPS = 1e-8
 
+# ---------------------------------
+# EBT (Energy-Based Transformer) configs
+# All defaults are global variables; features default OFF.
+# ---------------------------------
+EBT_ENABLE = True
+EBT_TRAIN_ENABLE = True
+EBT_INFER_ENABLE = True
+LR_ENERGY = 5e-4
+EBT_STEPS_ACT = 4
+EBT_STEP_SIZE = 0.25
+EBT_STOP_DELTA = 1e-4
+EBT_KL_REG = 0.05
+EBT_NEGATIVES = 4
+EBT_MARGIN = 0.5
+EBT_GRAD_PENALTY = 1e-4
+
 class SparseCartPole(gym.Wrapper):
     """Sparse reward for CartPole: reward=+1 if you survive to max_steps, else 0.
     This isn't standard CartPole success, but good enough for a sparse signal.
@@ -235,6 +251,28 @@ class ControlAgent(nn.Module):
         return self.v(msg).squeeze(-1)
 
 # ----------------------------
+# EBT Energy verifier head
+# ----------------------------
+class EnergyHead(nn.Module):
+    def __init__(self, msg_dim: int, n_actions: int, hidden: int = 128):
+        super().__init__()
+        self.n_actions = n_actions
+        self.net = nn.Sequential(
+            nn.Linear(msg_dim + n_actions, hidden), nn.SiLU(),
+            nn.Linear(hidden, hidden), nn.SiLU(),
+            nn.Linear(hidden, 1)
+        )
+
+    def forward(self, msg: torch.Tensor, act_probs: torch.Tensor) -> torch.Tensor:
+        """
+        msg: (B, D)
+        act_probs: (B, A) probability simplex or one-hot
+        returns: (B,) energy scalar (unnormalized; lower is better)
+        """
+        x = torch.cat([msg, act_probs], dim=-1)
+        return self.net(x).squeeze(-1)
+
+# ----------------------------
 # Storage for on-policy rollouts
 # ----------------------------
 @dataclass
@@ -316,7 +354,19 @@ class CORAL:
                  v_clip_eps: float = V_CLIP_EPS,
                  early_stop_by_kl: bool = EARLY_STOP_BY_KL,
                  target_kl: float = TARGET_KL,
-                 max_grad_norm: float = MAX_GRAD_NORM):
+                 max_grad_norm: float = MAX_GRAD_NORM,
+                 # EBT params (fully global / no literals)
+                 ebt_enable: bool = EBT_ENABLE,
+                 ebt_train_enable: bool = EBT_TRAIN_ENABLE,
+                 ebt_infer_enable: bool = EBT_INFER_ENABLE,
+                 lr_energy: float = LR_ENERGY,
+                 ebt_steps_act: int = EBT_STEPS_ACT,
+                 ebt_step_size: float = EBT_STEP_SIZE,
+                 ebt_stop_delta: float = EBT_STOP_DELTA,
+                 ebt_kl_reg: float = EBT_KL_REG,
+                 ebt_negatives: int = EBT_NEGATIVES,
+                 ebt_margin: float = EBT_MARGIN,
+                 ebt_grad_penalty: float = EBT_GRAD_PENALTY):
         base_env = gym.make(env_id)
         self.env = SparseCartPole(base_env) if sparse else base_env
         # Use a separate environment for evaluation to avoid interfering with training episode state
@@ -373,17 +423,32 @@ class CORAL:
         self.early_stop_by_kl = early_stop_by_kl
         self.target_kl = target_kl
         self.max_grad_norm = max_grad_norm
+        # EBT config to attributes
+        self.ebt_enable = bool(ebt_enable)
+        self.ebt_train_enable = bool(ebt_train_enable)
+        self.ebt_infer_enable = bool(ebt_infer_enable)
+        self.ebt_steps_act = int(ebt_steps_act)
+        self.ebt_step_size = float(ebt_step_size)
+        self.ebt_stop_delta = float(ebt_stop_delta)
+        self.ebt_kl_reg = float(ebt_kl_reg)
+        self.ebt_negatives = int(ebt_negatives)
+        self.ebt_margin = float(ebt_margin)
+        self.ebt_grad_penalty = float(ebt_grad_penalty)
         # Align threshold center with env success length if present
         if hasattr(self.env, 'success_len'):
             self.threshold_center = int(getattr(self.env, 'success_len'))
 
         self.IA = TransformerIA(self.obs_dim, d_model=d_model, msg_dim=msg_dim).to(DEVICE)
         self.CA = ControlAgent(msg_dim, self.n_actions).to(DEVICE)
+        # Energy verifier head (EBT)
+        self.Energy = EnergyHead(msg_dim, self.n_actions).to(DEVICE)
         self.opt_ca = torch.optim.Adam(self.CA.parameters(), lr=lr_ca)
         self.opt_ia = torch.optim.Adam(self.IA.parameters(), lr=lr_ia)
+        self.opt_energy = torch.optim.Adam(self.Energy.parameters(), lr=lr_energy)
         self.use_amp = USE_AMP
         self.scaler_ca = GradScaler(enabled=self.use_amp)
         self.scaler_ia = GradScaler(enabled=self.use_amp)
+        self.scaler_energy = GradScaler(enabled=self.use_amp)
 
         # Log device info
         if DEVICE.type == "cuda":
@@ -428,6 +493,38 @@ class CORAL:
         if self.msg_noise_std > 0.0:
             out = out + torch.randn_like(out) * float(self.msg_noise_std)
         return out
+
+    def _ebt_refine_logits(self, msg: torch.Tensor, init_logits: torch.Tensor) -> torch.Tensor:
+        """Refine action logits by minimizing energy with a KL tether to the base policy.
+        - Only z (logits) receives gradients; IA/CA are treated as frozen during refinement.
+        - Controlled by EBT_* global toggles.
+        """
+        if (not getattr(self, 'ebt_enable', False)) or (not getattr(self, 'ebt_infer_enable', False)):
+            return init_logits
+        steps = int(getattr(self, 'ebt_steps_act', 0))
+        if steps <= 0:
+            return init_logits
+        step_size = float(getattr(self, 'ebt_step_size', 0.0))
+        kl_reg = float(getattr(self, 'ebt_kl_reg', 0.0))
+        stop_delta = float(getattr(self, 'ebt_stop_delta', 0.0))
+        z = init_logits.detach().clone().requires_grad_(True)
+        orig_probs = F.softmax(init_logits.detach(), dim=-1)
+        prev_e = None
+        for _ in range(steps):
+            probs = F.softmax(z, dim=-1)
+            e = self.Energy(msg.detach(), probs).mean()
+            # KL(probs || orig_probs)
+            kl = (probs * (probs.clamp(min=ADV_EPS).log() - orig_probs.clamp(min=ADV_EPS).log())).sum(dim=-1).mean()
+            obj = e + kl_reg * kl
+            if z.grad is not None:
+                z.grad.zero_()
+            obj.backward()
+            with torch.no_grad():
+                z -= step_size * z.grad
+            if prev_e is not None and abs((prev_e - e).item()) < stop_delta:
+                break
+            prev_e = e.detach()
+        return z.detach()
 
     def _compute_advantages(self, rewards, values, dones, last_value=0.0):
         adv = []
@@ -497,8 +594,11 @@ class CORAL:
                 obs_seq_t = torch.tensor(obs_seq, dtype=torch.float32, device=DEVICE).unsqueeze(0)
                 with torch.no_grad():
                     msg, pred_next, _ = self.IA(obs_seq_t)
-                    # Act with CLEAN message for on-policy data
-                    dist = self.CA.policy(msg)
+                    base_logits = self.CA.pi(msg)
+                # Optional EBT refinement of logits (no grads to IA/CA)
+                refined_logits = self._ebt_refine_logits(msg.detach(), base_logits.detach())
+                with torch.no_grad():
+                    dist = Categorical(logits=refined_logits)
                     value = self.CA.value(msg)
                     action = dist.sample()
                     logp = dist.log_prob(action)
@@ -714,10 +814,53 @@ class CORAL:
                 # Unfreeze CA
                 for p in self.CA.parameters():
                     p.requires_grad_(True)
+
+                # -----------------
+                # EBT energy head update (ranking + gradient penalty)
+                # -----------------
+                if self.ebt_enable and self.ebt_train_enable:
+                    with autocast(device_type=AMP_DEVICE_TYPE, enabled=self.use_amp):
+                        # Positive pairs: (msg, taken_action)
+                        pos_onehot = F.one_hot(actions, num_classes=self.n_actions).float()
+                        # Use a detached clone that requires grad for GP without affecting IA
+                        pred_msgs_gp = pred_msgs.detach().clone().requires_grad_(True)
+                        e_pos = self.Energy(pred_msgs_gp, pos_onehot)
+                        # Negative actions per sample (exclude the taken action)
+                        N = actions.size(0)
+                        K = max(1, int(self.ebt_negatives))
+                        a = actions.unsqueeze(1).expand(N, K)
+                        neg = torch.randint(low=0, high=self.n_actions - 1, size=(N, K), device=DEVICE)
+                        neg = neg + (neg >= a).long()
+                        neg_onehot = F.one_hot(neg, num_classes=self.n_actions).float().view(N * K, self.n_actions)
+                        msgs_tiled = pred_msgs.detach().unsqueeze(1).expand(N, K, pred_msgs.size(-1)).contiguous().view(N * K, pred_msgs.size(-1))
+                        e_neg = self.Energy(msgs_tiled, neg_onehot).view(N, K)
+                        # Margin ranking: max(0, margin + e_pos - e_neg)
+                        hinge = F.relu(float(self.ebt_margin) + e_pos.unsqueeze(1) - e_neg)
+                        rank_loss = hinge.mean()
+                        # Gradient penalty wrt message (smooth energy landscape)
+                        gp = 0.0
+                        try:
+                            grad_msg = torch.autograd.grad(e_pos.sum(), pred_msgs_gp, create_graph=True, retain_graph=True)[0]
+                            gp = (grad_msg.pow(2).mean())
+                        except Exception:
+                            gp = torch.tensor(0.0, device=DEVICE)
+                        energy_loss = rank_loss + float(self.ebt_grad_penalty) * gp
+                    self.opt_energy.zero_grad()
+                    if self.use_amp:
+                        self.scaler_energy.scale(energy_loss).backward()
+                        self.scaler_energy.unscale_(self.opt_energy)
+                        torch.nn.utils.clip_grad_norm_(self.Energy.parameters(), self.max_grad_norm)
+                        self.scaler_energy.step(self.opt_energy)
+                        self.scaler_energy.update()
+                    else:
+                        energy_loss.backward()
+                        torch.nn.utils.clip_grad_norm_(self.Energy.parameters(), self.max_grad_norm)
+                        self.opt_energy.step()
             else:
                 # Skip IA update this iteration
                 pred_loss = torch.tensor(0.0)
                 cil = torch.tensor(0.0)
+                energy_loss = torch.tensor(0.0)
 
             # Raw (unweighted) KL for IA influence interpretability (ensure dtype matches CA params)
             with torch.no_grad():
@@ -734,6 +877,7 @@ class CORAL:
             # Logging line with richer stats
             print(
                 f"Update | steps={step_count} | pred_loss={pred_loss.item():.4f} | cil={cil.item():.4f} | raw_kl={raw_kl:.4f} | "
+                f"energy_loss={(energy_loss.item() if 'energy_loss' in locals() else 0.0):.4f} | "
                 f"msg_l2={(pred_msgs.pow(2).mean().item() if 'pred_msgs' in locals() else 0.0):.4f} | pg={np.mean(pg_losses):.4f} | v={np.mean(v_losses):.4f} | "
                 f"ent={np.mean(entropies):.3f} | kl~={np.mean(approx_kls):.4f} | clipfrac={np.mean(clipfracs) if clipfracs else 0.0:.3f} | "
                 f"ratio={np.mean(ratio_means) if ratio_means else 1.0:.3f} | ev={ev:.3f} | kl_stop={'Y' if early_stopped else 'N'}"
@@ -762,7 +906,10 @@ class CORAL:
                                     e_in = e_msg + torch.randn_like(e_msg) * float(self.eval_noisy_msg_std)
                                 else:
                                     e_in = e_msg
-                                e_dist = self.CA.policy(e_in)
+                                base_logits = self.CA.pi(e_in)
+                            ref_logits = self._ebt_refine_logits(e_in.detach(), base_logits.detach())
+                            with torch.no_grad():
+                                e_dist = Categorical(logits=ref_logits)
                                 e_action = torch.argmax(e_dist.probs, dim=-1)
                             e_next_obs, e_reward, e_term, e_trunc, _e_info = self.eval_env.step(e_action.item())
                             n_e_next = self.obs_rms.normalize(e_next_obs) if self.obs_rms is not None else e_next_obs
