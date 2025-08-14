@@ -30,6 +30,18 @@ DEFAULTS: Dict[str, Any] = {
         "REFLECT": 13,
         "CROP": 14,
         "PAD": 15,
+        # Extended ops (IDs configurable via state/config.yaml)
+        "FIND_COMPONENTS": 16,
+        "GET_BBOX": 17,
+        "PAINT_OBJECT": 18,
+        "COUNT_COLOR": 19,
+        "MAJORITY_COLOR": 20,
+        "TRANSLATE": 21,
+        "DRAW_LINE": 22,
+        "FILL_RECT": 23,
+        "REPEAT_TILE": 24,
+        "OVERLAY_UNION": 25,
+        "OVERLAY_INTERSECT": 26,
         "BASE_NUM": 100,
         "BASE_COLOR": 200,
         "BASE_ROT": 300,
@@ -41,6 +53,9 @@ DEFAULTS: Dict[str, Any] = {
         "max_expansions_per_node": 32,
         "cache_results": True,
         "bad_score": -1e9,
+        # Typed incremental search weights
+        "typed_w_logprob": 1.0,
+        "typed_w_heur": 1.0,
         # Numerical stability for entropy calculation
         "entropy_eps": 1e-12,
         "entropy_clip_max": 1.0,
@@ -72,6 +87,26 @@ DEFAULTS: Dict[str, Any] = {
         "nlayers": 2,
         "dropout": 0.1,
         "max_tokens": 128,
+        # CNN backbone knobs
+        "use_cnn_backbone": True,
+        "cnn_channels": [64, 128],  # per stage output channels
+        "cnn_blocks_per_stage": [1, 1],
+        "cnn_kernel_size": 3,
+        "cnn_norm": "batch",  # "batch" or "layer" or "none"
+        "cnn_pool": "avg",    # global pooling: "avg" or "max"
+        # Input encoding
+        "input_onehot": True,  # use one-hot over colors as input channels
+        # Object-centric branch knobs
+        "use_object_branch": True,
+        "components_connectivity": 4,
+        "components_background_color": 0,
+        "obj_max_components": 64,
+        "obj_hidden": 128,
+        "obj_heads": 4,
+        "obj_layers": 2,
+        "obj_pool": "attn",   # "attn" or "mean"
+        # Context fusion
+        "context_fusion": "concat_proj",  # how to fuse grid+objects -> D
     },
     "inference": {
         "time_budget_s": 10,

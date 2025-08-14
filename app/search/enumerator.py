@@ -28,6 +28,42 @@ def _args_for(op_tok: int) -> List[List[int]]:
         nums = [T.NUM_TOKENS[n] for n in NUMS]
         cols = [T.COLOR_TOKENS[c] for c in COLORS]
         return [nums, nums, nums, nums, cols]
+    # Extended ops
+    if op_tok == T.TOK["FIND_COMPONENTS"]:
+        nums = [T.NUM_TOKENS[n] for n in NUMS]
+        return [nums]
+    if op_tok == T.TOK["GET_BBOX"]:
+        cols = [T.COLOR_TOKENS[c] for c in COLORS]
+        return [cols]
+    if op_tok == T.TOK["PAINT_OBJECT"]:
+        cols = [T.COLOR_TOKENS[c] for c in COLORS]
+        return [cols, cols]
+    if op_tok == T.TOK["COUNT_COLOR"]:
+        cols = [T.COLOR_TOKENS[c] for c in COLORS]
+        return [cols]
+    if op_tok == T.TOK["MAJORITY_COLOR"]:
+        cols = [T.COLOR_TOKENS[c] for c in COLORS]
+        return [cols]
+    if op_tok == T.TOK["TRANSLATE"]:
+        nums = [T.NUM_TOKENS[n] for n in NUMS]
+        return [nums, nums]
+    if op_tok == T.TOK["DRAW_LINE"]:
+        nums = [T.NUM_TOKENS[n] for n in NUMS]
+        cols = [T.COLOR_TOKENS[c] for c in COLORS]
+        return [nums, nums, nums, nums, cols]
+    if op_tok == T.TOK["FILL_RECT"]:
+        nums = [T.NUM_TOKENS[n] for n in NUMS]
+        cols = [T.COLOR_TOKENS[c] for c in COLORS]
+        return [nums, nums, nums, nums, cols]
+    if op_tok == T.TOK["REPEAT_TILE"]:
+        nums = [T.NUM_TOKENS[n] for n in NUMS]
+        return [nums, nums]
+    if op_tok == T.TOK["OVERLAY_UNION"]:
+        cols = [T.COLOR_TOKENS[c] for c in COLORS]
+        return [cols, cols, cols]
+    if op_tok == T.TOK["OVERLAY_INTERSECT"]:
+        cols = [T.COLOR_TOKENS[c] for c in COLORS]
+        return [cols, cols, cols]
     return []
 
 

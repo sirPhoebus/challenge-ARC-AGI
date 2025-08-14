@@ -32,6 +32,18 @@ OP_ARITY: Dict[int, int] = {
     TOK["REFLECT"]: 1,     # type
     TOK["CROP"]: 4,        # top, left, height, width
     TOK["PAD"]: 5,         # top, bottom, left, right, color
+    # Extended ops
+    TOK["FIND_COMPONENTS"]: 1,     # offset
+    TOK["GET_BBOX"]: 1,            # color
+    TOK["PAINT_OBJECT"]: 2,        # src_color, dst_color
+    TOK["COUNT_COLOR"]: 1,         # color
+    TOK["MAJORITY_COLOR"]: 1,      # tie_color
+    TOK["TRANSLATE"]: 2,           # dy, dx
+    TOK["DRAW_LINE"]: 5,           # y0, x0, y1, x1, color
+    TOK["FILL_RECT"]: 5,           # top, left, height, width, color
+    TOK["REPEAT_TILE"]: 2,         # ny, nx
+    TOK["OVERLAY_UNION"]: 3,       # color_a, color_b, out_color
+    TOK["OVERLAY_INTERSECT"]: 3,   # color_a, color_b, out_color
 }
 
 # Allowed op token ids (enable list in config controls availability)
