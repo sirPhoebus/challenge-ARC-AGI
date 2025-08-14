@@ -54,8 +54,7 @@ state/*.json
 .cache/
 **/.cache/
 
-data/
 !.keep
-state/
+
 # Notebooks checkpoints
 .ipynb_checkpoints/

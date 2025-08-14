@@ -1,0 +1,60 @@
+# Global configuration for ARC DSL, search, model, training, and eval
+# All modules must import values from app.config or app.utils.tokens; no hardcoded literals in code.
+
+dsl:
+  max_depth: 4
+  max_arity: 2
+  num_colors: 10            # ARC color palette size (0..9)
+  max_grid_size: 30         # safety clamp for crop/pad
+  enum_numeric_values: [0,1,2,3,4]
+  rotations: [0,1,2,3]      # k for np.rot90
+  reflections: [0,1,2,3,4]  # 0:none, 1:vertical, 2:horizontal, 3:diag_main, 4:diag_anti
+  enable_ops: [MAP_COLOR, FILTER_EQ, ROTATE, REFLECT, CROP, PAD, COMPOSE]
+
+# Token ID base offsets. We keep them here so nothing is hardcoded in code.
+tokens:
+  START: 1
+  END: 2
+  COMPOSE: 3
+  MAP_COLOR: 10
+  FILTER_EQ: 11
+  ROTATE: 12
+  REFLECT: 13
+  CROP: 14
+  PAD: 15
+  BASE_NUM: 100            # numbers (coordinates/amounts): BASE_NUM + i
+  BASE_COLOR: 200          # color tokens: BASE_COLOR + color_id
+  BASE_ROT: 300            # rotation k tokens
+  BASE_REFLECT: 320        # reflect type tokens
+
+search:
+  beam_width: 16
+  max_nodes: 1000
+  max_expansions_per_node: 32
+  cache_results: true
+  bad_score: -1e9
+
+training:
+  pseudo_max_depth: 3
+  task_limit: 20
+  batch_size: 64
+  epochs: 5
+  lr: 0.0005
+  weight_decay: 0.0
+  grad_clip: 1.0
+  entropy_coef: 0.0
+  kl_coef: 0.0
+  seed: 42
+
+model:
+  d_model: 128
+  nhead: 4
+  nlayers: 2
+  dropout: 0.1
+  max_tokens: 128
+
+inference:
+  time_budget_s: 10
+  beam_width: 16
+  max_nodes: 1000
+  use_policy: true
